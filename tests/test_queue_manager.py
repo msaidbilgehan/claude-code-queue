@@ -216,7 +216,7 @@ def test_priority_order_respected(manager):  # QMG-009
     """The prompt with the lowest priority number is executed first."""
     executed_ids = []
 
-    def fake_execute(prompt):
+    def fake_execute(prompt, resume_message=None):
         executed_ids.append(prompt.id)
         return _success_result()
 

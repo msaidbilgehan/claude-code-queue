@@ -39,6 +39,7 @@ SKILL_PATH = (
 _CLI_SUBCOMMANDS = {
     "start", "add", "template", "status", "cancel",
     "list", "test", "bank", "batch", "install-skill", "prompt-box",
+    "resume-session",
 }
 
 
