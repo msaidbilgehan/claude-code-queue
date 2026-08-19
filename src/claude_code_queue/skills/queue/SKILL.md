@@ -48,7 +48,32 @@ claude-queue start
 
 # Cancel a queued prompt
 claude-queue cancel <prompt-id>
+
+# Continue THIS session later, when the usage limit resets
+claude-queue resume-session
 ```
+
+## Continuing a Rate-Limited Session
+
+When the current session hits the usage limit mid-task, suggest queuing its
+continuation rather than starting the work over later:
+
+```bash
+claude-queue resume-session                              # continues this session
+claude-queue resume-session -m "Finish the migration"    # with explicit instructions
+claude-queue resume-session <session-id>                 # some other session
+```
+
+With no arguments it uses `$CLAUDE_CODE_SESSION_ID`, so it works from inside the
+session that hit the limit. At reset the queue reopens that conversation — the
+whole history is intact, so work already done is not repeated.
+
+The continuation runs non-interactively (`claude --print --resume`). Results land
+in `~/.claude-queue/completed/`, and the session stays reopenable with
+`claude --resume <session-id>` afterwards.
+
+Queued jobs get this automatically: an interrupted job resumes its own session on
+retry instead of restarting.
 
 ## Prompt Template Format
 
@@ -88,6 +113,7 @@ What should be delivered when done.
 | `context_files` | Paths relative to `working_directory`. Only include files that exist. |
 | `max_retries` | Total attempts: `3` = 3 total, `-1` = unlimited, `1` = no retry. Rate-limit retries and failures share this counter. |
 | `estimated_tokens` | Optional hint; set `null` if unknown. |
+| `resume_message` | Sent when continuing an interrupted attempt. Omit to use the configured default. |
 
 ### Priority Guidelines
 
@@ -169,6 +195,10 @@ Refactor `{{filename}}` located at `{{filepath}}`:
 **`--dangerously-skip-permissions`**: Passed to `claude` by default so the
 daemon runs unattended. To disable interactive permission prompts:
 `claude-queue start --no-skip-permissions`.
+
+**Resume message defaults**: set `resume_message` in the prompt, or
+`resume_message:` in `.claude-queue.yaml` in the project directory, or in
+`~/.claude-queue/config.yaml` queue-wide.
 
 **At-least-once semantics**: If the daemon crashes mid-execution, the task
 reruns on restart. Prompt users to design queued tasks to be idempotent

@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from .batch import (
 from .queue_manager import QueueManager
 from .storage import QueueStorage
 from .models import QueuedPrompt, PromptStatus
+from .config import PROJECT_CONFIG_FILENAME, resolve_resume_message
 from .paths import claude_config_dir
 
 
@@ -117,6 +119,36 @@ Examples:
         action="store_true",
         default=False,
         help="Do not pass --dangerously-skip-permissions to claude (requires confirmation dialogs)",
+    )
+
+    resume_parser = subparsers.add_parser(
+        "resume-session",
+        help="Queue a continuation of an existing Claude Code session",
+        description=(
+            "Queue a job that continues an existing Claude Code conversation once "
+            "the usage limit resets. With no SESSION_ID, the session Claude Code "
+            "exported as $CLAUDE_CODE_SESSION_ID is used, so this can be run from "
+            "inside the session that hit the limit."
+        ),
+    )
+    resume_parser.add_argument(
+        "session_id",
+        nargs="?",
+        metavar="SESSION_ID",
+        help="Session to continue (default: $CLAUDE_CODE_SESSION_ID)",
+    )
+    resume_parser.add_argument(
+        "--message",
+        "-m",
+        help="Message to send when continuing (default: the configured resume message)",
+    )
+    resume_parser.add_argument(
+        "--priority", "-p", type=int, default=0,
+        help="Priority (lower = higher priority)",
+    )
+    resume_parser.add_argument(
+        "--working-dir", "-d", default=".",
+        help="Directory the continuation runs in (default: current directory)",
     )
 
     add_parser = subparsers.add_parser("add", help="Add a prompt to the queue")
@@ -279,6 +311,8 @@ Examples:
             return cmd_bank(args)
         elif args.command == "batch":
             return cmd_batch(args)
+        elif args.command == "resume-session":
+            return cmd_resume_session(args)
         elif args.command == "install-skill":
             return cmd_install_skill(args)
         elif args.command == "prompt-box":
@@ -335,6 +369,64 @@ def cmd_add(args) -> int:
     if success:
         print(f"✓ Added prompt {prompt.id} to queue")
     return 0 if success else 1
+
+
+def cmd_resume_session(args) -> int:
+    """Queue a continuation of an existing Claude Code session.
+
+    Claude Code exports the running session's id as $CLAUDE_CODE_SESSION_ID, so
+    this can be run from inside the session that hit the usage limit: the queue
+    picks the conversation back up at reset instead of the user having to
+    remember to.
+
+    The continuation runs non-interactively via ``claude --print --resume``. The
+    conversation is a normal session afterwards, so it can still be reopened with
+    ``claude --resume <id>`` with the queue's work already in its history.
+    """
+    session_id = args.session_id or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if not session_id:
+        print(
+            "Error: no session id given and $CLAUDE_CODE_SESSION_ID is not set.\n"
+            "Pass one explicitly: claude-queue resume-session <session-id>",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Validate now rather than letting the CLI reject it at execution time, hours
+    # later, after the reset the user was waiting for.
+    try:
+        uuid.UUID(session_id)
+    except (ValueError, AttributeError, TypeError):
+        print(
+            f"Error: {session_id!r} is not a valid session id (expected a UUID).",
+            file=sys.stderr,
+        )
+        return 1
+
+    working_dir = str(Path(args.working_dir).expanduser().resolve())
+    storage = QueueStorage(storage_dir=args.storage_dir)
+    prompt = QueuedPrompt(
+        content=(
+            f"Continue Claude Code session `{session_id}`.\n\n"
+            "The queue resumes this conversation when the usage limit resets. The "
+            "message it sends is the `resume_message` below, falling back to "
+            f"`{PROJECT_CONFIG_FILENAME}` in the working directory, then the "
+            "queue's `config.yaml`, then the built-in default."
+        ),
+        working_directory=working_dir,
+        priority=args.priority,
+        session_id=session_id,
+        resume_message=args.message,
+    )
+
+    if not storage._save_single_prompt(prompt):
+        return 1
+
+    message = resolve_resume_message(args.message, working_dir, args.storage_dir)
+    print(f"✓ Queued continuation of session {session_id} as prompt {prompt.id}")
+    print(f"  Working directory: {working_dir}")
+    print(f"  Will send: {message}")
+    return 0
 
 
 def cmd_template(args) -> int:
