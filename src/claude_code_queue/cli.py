@@ -132,12 +132,14 @@ Examples:
         ),
     )
     sessions_parser.add_argument(
-        "--all", "-a", action="store_true",
-        help="Every project, not just the current directory",
+        "project",
+        nargs="?",
+        metavar="PROJECT",
+        help="Directory to list sessions for (default: the current directory)",
     )
     sessions_parser.add_argument(
-        "--project", "-d",
-        help="List sessions for this directory instead of the current one",
+        "--all", "-a", action="store_true",
+        help="Every project, not just one directory",
     )
     sessions_parser.add_argument(
         "--search", "-s", help="Only sessions whose title contains this text",
@@ -427,7 +429,19 @@ def cmd_sessions(args) -> int:
     Scoped to the current directory by default: the question is almost always
     "which of my sessions in this project was that one?".
     """
+    if args.all and args.project:
+        print(
+            f"Error: --all lists every project; drop it to scope to {args.project}.",
+            file=sys.stderr,
+        )
+        return 1
+
     project = None if args.all else (args.project or os.getcwd())
+    if args.project and not Path(args.project).expanduser().is_dir():
+        # A warning, not an error: a project can be deleted while its transcripts
+        # remain, and listing those is a legitimate thing to want.
+        print(f"Warning: {args.project} is not a directory.", file=sys.stderr)
+
     limit = None if args.limit == 0 else args.limit
     found = list_sessions(project_dir=project, search=args.search, limit=limit)
 
@@ -453,7 +467,8 @@ def cmd_sessions(args) -> int:
 
     if args.all:
         print()
-        print("Project directories vary; use --project DIR to narrow the list.")
+        print("Project directories vary; pass one to narrow the list: "
+              "claude-queue sessions DIR")
     print()
     print("Continue one when the limit resets:")
     print(f"  claude-queue resume-session {found[0].session_id}")

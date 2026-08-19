@@ -177,6 +177,7 @@ You can also queue a continuation of a session you were working in yourself.
 
 ```bash
 claude-queue sessions                   # this project, newest first
+claude-queue sessions ~/code/other      # some other project
 claude-queue sessions --all             # every project
 claude-queue sessions --search parser   # filter by title
 claude-queue sessions --json            # machine-readable

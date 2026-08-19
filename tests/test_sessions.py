@@ -231,14 +231,39 @@ class TestSessionsCommand:
         self._run()
         assert "--all" in capsys.readouterr().out
 
-    def test_project_flag_narrows_the_list(self, tmp_path, monkeypatch, capsys):  # SES-035
+    def test_a_directory_argument_narrows_the_list(self, tmp_path, monkeypatch, capsys):  # SES-035
+        """`sessions DIR` is what people reach for, so it must be the plain form."""
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
         project = tmp_path / "proj"
         project.mkdir()
         _write_log(tmp_path, project=str(project), ai_title="in project")
         _write_log(tmp_path, session_id="b" * 8 + "-1111-2222-3333-444444444444",
                    project="/elsewhere", ai_title="somewhere else")
-        assert self._run("--project", str(project)) == 0
+        assert self._run(str(project)) == 0
         out = capsys.readouterr().out
         assert "in project" in out
         assert "somewhere else" not in out
+
+    def test_trailing_slash_is_accepted(self, tmp_path, monkeypatch, capsys):  # SES-036
+        """Shell tab-completion appends one."""
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        project = tmp_path / "proj"
+        project.mkdir()
+        _write_log(tmp_path, project=str(project), ai_title="in project")
+        assert self._run(str(project) + "/") == 0
+        assert "in project" in capsys.readouterr().out
+
+    def test_all_together_with_a_directory_is_refused(self, tmp_path, monkeypatch, capsys):  # SES-037
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        assert self._run("--all", str(tmp_path)) == 1
+        assert "--all lists every project" in capsys.readouterr().err
+
+    def test_unknown_directory_warns_but_still_looks(self, tmp_path, monkeypatch, capsys):  # SES-038
+        """A project can be deleted while its transcripts remain."""
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        gone = tmp_path / "deleted-project"
+        _write_log(tmp_path, project=str(gone), ai_title="from a deleted project")
+        assert self._run(str(gone)) == 0
+        captured = capsys.readouterr()
+        assert "is not a directory" in captured.err
+        assert "from a deleted project" in captured.out

@@ -256,7 +256,7 @@ resume_message: null     # overrides the configured resume message
 |---|---|---|
 | `start [--verbose] [--no-skip-permissions]` | Run queue loop | Yes |
 | `add <prompt> [-p priority]` | Quick-add prompt | No |
-| `sessions [--all] [--search t]` | List session ids and titles | No |
+| `sessions [DIR] [--all] [--search t]` | List session ids and titles | No |
 | `resume-session [id] [-m msg]` | Queue a continuation of an existing session | No |
 | `template <name> [-p priority]` | Create template .md | No |
 | `status [--json] [--detailed]` | Queue stats | No |
