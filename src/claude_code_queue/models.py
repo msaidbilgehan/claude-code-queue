@@ -39,6 +39,8 @@ class QueuedPrompt:
     rate_limited_at: Optional[datetime] = None
     reset_time: Optional[datetime] = None
     retry_not_before: Optional[datetime] = None  # Fix 3: earliest time for next generic retry
+    session_id: Optional[str] = None  # set after the first attempt; makes retries resume it
+    resume_message: Optional[str] = None  # overrides the configured resume message
 
     def add_log(self, message: str) -> None:
         """Add a log entry with timestamp."""

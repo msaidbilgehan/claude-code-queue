@@ -13,6 +13,7 @@ from typing import Optional, Callable, Dict, Any
 from .models import QueuedPrompt, QueueState, PromptStatus, ExecutionResult
 from .storage import QueueStorage
 from .claude_interface import ClaudeCodeInterface
+from .config import resolve_resume_message
 from .locking import QueueLock, QueueLockError
 from .paths import claude_config_dir
 
@@ -320,7 +321,12 @@ class QueueManager:
         # execute_prompt() may raise KeyboardInterrupt (Ctrl+C path).
         # _process_execution_result() is intentionally bypassed in that case;
         # the prompt stays EXECUTING for _shutdown() to revert to QUEUED.
-        result = self.claude_interface.execute_prompt(prompt)
+        resume_message = resolve_resume_message(
+            prompt.resume_message,
+            prompt.working_directory,
+            self.storage.base_dir,
+        )
+        result = self.claude_interface.execute_prompt(prompt, resume_message)
 
         self._process_execution_result(prompt, result)
 
@@ -329,6 +335,11 @@ class QueueManager:
     ) -> None:
         """Process the result of prompt execution."""
         execution_summary = f"Execution completed in {result.execution_time:.1f}s"
+
+        # Remember the session so the next attempt continues this conversation
+        # instead of starting over and repeating whatever it already finished.
+        if result.session_id:
+            prompt.session_id = result.session_id
 
         if result.success:
             # retry_not_before is already None — cleared by _execute_prompt() via clear_retry_backoff().
@@ -400,8 +411,6 @@ class QueueManager:
             else:
                 print(f"⚠ Prompt {prompt.id} rate limited, will retry in 5 minutes")
 
-            self._cleanup_rate_limit_artifacts(prompt, result.session_id)
-
         else:
             prompt.retry_count += 1
 
@@ -436,64 +445,63 @@ class QueueManager:
                     f"✗ Prompt {prompt.id} failed permanently after {retries_str} attempts"
                 )
 
+        # Terminal states only: while a prompt can still be retried, its session is
+        # the state --resume continues from.
+        if prompt.status in (PromptStatus.COMPLETED, PromptStatus.FAILED):
+            self._cleanup_session_artifacts(prompt)
+
         self.state.last_processed = datetime.now()
 
-    def _cleanup_rate_limit_artifacts(
-        self, prompt: QueuedPrompt, session_id: Optional[str]
-    ) -> None:
-        """Remove the artifact files this rate-limited execution left behind.
+    def _cleanup_session_artifacts(self, prompt: QueuedPrompt) -> None:
+        """Remove the scratch files this prompt's session left behind.
 
-        A rate-limited ``claude --print`` still writes a conversation log, a todo
-        stub, a debug transcript and telemetry events. Left alone they accumulate
-        (thousands per rate-limit window) until the Claude Code UI crawls loading
-        the junk history.
+        Every run also writes a todo stub, a debug transcript and telemetry events
+        under the Claude Code config directory. None of it is worth keeping once
+        the prompt reaches a terminal state, and it accumulates across queued jobs
+        until the Claude Code UI crawls loading the junk.
 
-        Deletion is keyed on *session_id* — the UUID this queue generated and
-        passed to the CLI via ``--session-id`` — so every path targeted is an exact
-        match for a file this execution created. When *session_id* is ``None`` (the
-        installed CLI predates the flag) nothing is deleted: identifying the files
-        heuristically, by size and mtime, risks destroying an unrelated session's
-        history.
+        The conversation log (``<uuid>.jsonl``) is deliberately kept. While the
+        prompt is still retryable it is the state ``--resume`` continues from, and
+        afterwards it is the record of what the run actually did. Because retries
+        resume instead of starting over, one prompt yields one log however many
+        times it is interrupted — the per-attempt pile-up this cleanup was
+        originally written for cannot happen any more.
 
         Failures are logged and swallowed. Propagating would skip
         save_queue_state(), leaving the prompt as ``.executing.md`` on disk and
         causing a re-queue loop on the next start.
         """
-        if session_id is None:
+        session_id = prompt.session_id
+        if not session_id:
             return
 
         try:
-            deleted = self._do_cleanup_rate_limit_artifacts(session_id)
+            deleted = self._do_cleanup_session_artifacts(session_id)
         except Exception as e:
             prompt.add_log(f"Warning: artifact cleanup failed: {e}")
             print(f"Warning: artifact cleanup failed: {e}")
             return
 
         if deleted:
-            prompt.add_log(f"Cleaned up {deleted} rate-limit artifact(s)")
-            print(f"[cleanup] Removed {deleted} rate-limit artifact(s)")
+            prompt.add_log(f"Cleaned up {deleted} session artifact(s)")
+            print(f"[cleanup] Removed {deleted} session artifact(s)")
 
     @staticmethod
-    def _do_cleanup_rate_limit_artifacts(session_id: str) -> int:
-        """Delete *session_id*'s artifacts; return how many files were removed.
+    def _do_cleanup_session_artifacts(session_id: str) -> int:
+        """Delete *session_id*'s scratch files; return how many were removed.
 
-        IMPORTANT: this depends on Claude Code's internal layout under the config
-        directory (``projects/``, ``todos/``, ``debug/``, ``telemetry/``). That
-        layout is undocumented and may change between versions; if it does,
-        cleanup silently stops finding files, which is safe — nothing outside
-        these four session-scoped names is ever touched.
+        Keyed on the session UUID the queue generated, so every path targeted is an
+        exact name for a file this prompt created — no size or mtime guessing, and
+        no other session can match.
 
-        The conversation log is found with a ``projects/*/<uuid>.jsonl`` glob
-        rather than by rebuilding Claude Code's encoded project-directory name.
-        That encoding rewrites ``.`` and ``_`` to ``-`` as well as ``/``, so
-        recomputing it silently misses any project path containing those
-        characters. A session UUID is unique on its own, which makes the glob both
-        simpler and exact.
+        IMPORTANT: depends on Claude Code's internal layout under the config
+        directory (``todos/``, ``debug/``, ``telemetry/``). That layout is
+        undocumented and may change between versions; if it does, cleanup silently
+        finds nothing, which is safe — nothing outside these session-scoped names
+        is ever touched.
         """
         claude_dir = claude_config_dir()
         targets = [
-            # Conversation log — parent directory name is unknown, matched by UUID.
-            *claude_dir.glob(f"projects/*/{session_id}.jsonl"),
             # Todo stub — deterministic name.
             claude_dir / "todos" / f"{session_id}-agent-{session_id}.json",
             # Debug transcript — deterministic name.

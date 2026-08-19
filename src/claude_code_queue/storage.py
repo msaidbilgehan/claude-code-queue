@@ -136,6 +136,8 @@ class MarkdownPromptParser:
                 retry_not_before=QueueStorage._parse_optional_datetime(
                     metadata.get("retry_not_before")
                 ),
+                session_id=metadata.get("session_id"),
+                resume_message=metadata.get("resume_message"),
             )
 
             return prompt
@@ -169,6 +171,10 @@ class MarkdownPromptParser:
                 metadata["reset_time"] = prompt.reset_time.isoformat()
             if prompt.retry_not_before is not None:
                 metadata["retry_not_before"] = prompt.retry_not_before.isoformat()
+            if prompt.session_id:
+                metadata["session_id"] = prompt.session_id
+            if prompt.resume_message:
+                metadata["resume_message"] = prompt.resume_message
 
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write("---\n")

@@ -14,9 +14,10 @@ import time
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, FrozenSet, Optional, List, Tuple
 from zoneinfo import ZoneInfo
 
+from .config import DEFAULT_RESUME_MESSAGE
 from .models import ExecutionResult, RateLimitInfo, QueuedPrompt
 
 
@@ -84,11 +85,12 @@ _DRAIN_TIMEOUT_S = 2
 class ClaudeCodeInterface:
     """Interface for executing prompts via Claude Code CLI."""
 
-    # Whether the installed CLI accepts --session-id. _verify_claude_available()
-    # overrides this per instance; the class-level default keeps instances that
+    # Which optional flags the installed CLI accepts. _verify_claude_available()
+    # overrides these per instance; the class-level defaults keep instances that
     # bypass __init__ (and any instance whose verification was patched out) from
     # emitting a flag the CLI may not understand.
     _supports_session_id: bool = False
+    _supports_resume: bool = False
 
     def __init__(self, claude_command: str = "claude", timeout: int = 3600,
                  skip_permissions: bool = True):
@@ -147,7 +149,9 @@ class ClaudeCodeInterface:
                         file=sys.stderr,
                     )
 
-            self._supports_session_id = self._detect_session_id_support(subprocess_env)
+            supported = self._detect_supported_flags(subprocess_env)
+            self._supports_session_id = "--session-id" in supported
+            self._supports_resume = "--resume" in supported
 
         except FileNotFoundError:
             raise RuntimeError(
@@ -156,13 +160,13 @@ class ClaudeCodeInterface:
         except subprocess.TimeoutExpired:
             raise RuntimeError("Claude Code CLI verification timed out.")
 
-    def _detect_session_id_support(self, subprocess_env: Dict[str, str]) -> bool:
-        """Return True when the installed claude CLI accepts ``--session-id``.
+    def _detect_supported_flags(self, subprocess_env: Dict[str, str]) -> FrozenSet[str]:
+        """Return the long options the installed claude CLI advertises in ``--help``.
 
-        The queue supplies its own session UUID so rate-limit artifact cleanup can
-        identify the run's files exactly rather than guessing by size and mtime.
-        A CLI that predates the flag rejects it outright, which would fail every
-        queued prompt, so the flag is only used when ``--help`` advertises it.
+        The queue supplies its own session UUID (``--session-id``) so artifact
+        cleanup can identify a run's files exactly, and continues interrupted work
+        with ``--resume``. A CLI predating either flag rejects it outright, which
+        would fail every queued prompt, so each is used only when advertised.
         """
         try:
             result = subprocess.run(
@@ -173,8 +177,10 @@ class ClaudeCodeInterface:
                 env=subprocess_env,
             )
         except (OSError, subprocess.SubprocessError):
-            return False
-        return result.returncode == 0 and "--session-id" in result.stdout
+            return frozenset()
+        if result.returncode != 0:
+            return frozenset()
+        return frozenset(re.findall(r"--[a-z][a-z0-9-]*", result.stdout))
 
     def _atexit_cleanup(self) -> None:
         """Wrapper for atexit — survives interpreter shutdown.
@@ -286,13 +292,26 @@ class ClaudeCodeInterface:
         )
         self._escalate_thread.start()
 
-    def execute_prompt(self, prompt: QueuedPrompt) -> ExecutionResult:
-        """Execute a prompt via Claude Code CLI."""
+    def execute_prompt(
+        self, prompt: QueuedPrompt, resume_message: Optional[str] = None
+    ) -> ExecutionResult:
+        """Execute a prompt via Claude Code CLI.
+
+        When *prompt* already carries a ``session_id``, an earlier attempt got part
+        of the way through: the run continues that conversation rather than starting
+        over, so work the interrupted attempt finished is not repeated.
+        *resume_message* is what gets sent in that case — the caller resolves it from
+        the prompt, project, and queue configuration.
+        """
         start_time = time.time()
 
-        # Generated up front so a rate-limited run can be correlated to the exact
-        # artifact files it created (see QueueManager._do_cleanup_rate_limit_artifacts).
-        session_id = str(uuid.uuid4()) if self._supports_session_id else None
+        resuming = bool(prompt.session_id) and self._supports_resume
+        if resuming:
+            session_id = prompt.session_id
+        else:
+            # Generated up front so the run can be correlated to the exact artifact
+            # files it creates (see QueueManager._cleanup_session_artifacts).
+            session_id = str(uuid.uuid4()) if self._supports_session_id else None
 
         try:
             working_dir = Path(prompt.working_directory).resolve()
@@ -321,24 +340,31 @@ class ClaudeCodeInterface:
             cmd = [self.claude_command, "--print"]
             if self.skip_permissions:
                 cmd.append("--dangerously-skip-permissions")
-            if session_id is not None:
+            if resuming:
+                cmd.extend(["--resume", session_id])
+            elif session_id is not None:
                 cmd.extend(["--session-id", session_id])
 
-            full_prompt = prompt.content
+            if resuming:
+                # The instruction and its context files are already in the
+                # conversation; re-sending them invites redoing finished work.
+                full_prompt = resume_message or DEFAULT_RESUME_MESSAGE
+            else:
+                full_prompt = prompt.content
 
-            if prompt.context_files:
-                context_refs = []
-                for context_file in prompt.context_files:
-                    # E1 — Resolve context paths against working_dir so the
-                    # Python-side exists() guard works correctly for relative paths.
-                    # Before E1 (os.chdir), relative paths resolved against the
-                    # changed CWD; now we must be explicit.
-                    context_path = working_dir / context_file
-                    if context_path.exists():
-                        context_refs.append(f"@{context_file}")
+                if prompt.context_files:
+                    context_refs = []
+                    for context_file in prompt.context_files:
+                        # E1 — Resolve context paths against working_dir so the
+                        # Python-side exists() guard works correctly for relative paths.
+                        # Before E1 (os.chdir), relative paths resolved against the
+                        # changed CWD; now we must be explicit.
+                        context_path = working_dir / context_file
+                        if context_path.exists():
+                            context_refs.append(f"@{context_file}")
 
-                if context_refs:
-                    full_prompt = f"{' '.join(context_refs)} {prompt.content}"
+                    if context_refs:
+                        full_prompt = f"{' '.join(context_refs)} {prompt.content}"
 
             cmd.append(full_prompt)
 
