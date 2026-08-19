@@ -138,6 +138,21 @@ class TestArtifactRemoval:
         mocker.patch.object(Path, "unlink", flaky)
         assert QueueManager._do_cleanup_rate_limit_artifacts(SESSION_ID) == 3
 
+    def test_symlinked_projects_directory_is_traversed(self, tmp_path, monkeypatch):  # ART-018
+        """Profiles routinely symlink projects/ at a directory shared between them
+        so history follows the user across profiles. The glob has to follow that
+        link or cleanup silently finds nothing."""
+        profile, shared = tmp_path / "profile", tmp_path / "shared"
+        (shared / "-Users-x-proj").mkdir(parents=True)
+        jsonl = shared / "-Users-x-proj" / f"{SESSION_ID}.jsonl"
+        jsonl.write_text("x")
+        profile.mkdir()
+        (profile / "projects").symlink_to(shared, target_is_directory=True)
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(profile))
+
+        assert QueueManager._do_cleanup_rate_limit_artifacts(SESSION_ID) == 1
+        assert not jsonl.exists()
+
 
 class TestCleanupWrapper:
     def test_none_session_id_deletes_nothing(self, manager, tmp_path, monkeypatch):  # ART-020
