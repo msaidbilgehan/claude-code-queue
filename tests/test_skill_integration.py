@@ -131,7 +131,7 @@ class TestQueueRoundTrip:
             f"found {len(completed)} in {tmp_path / 'completed'}"
         )
 
-    def test_si002_installed_skill_content_is_readable_yaml(self, tmp_path):
+    def test_si002_installed_skill_content_is_readable_yaml(self, tmp_path, monkeypatch):
         """
         SI-002: After install-skill writes the file, it can be re-parsed as
         valid YAML frontmatter — a sanity check on the file-copy path.
@@ -139,6 +139,7 @@ class TestQueueRoundTrip:
         from pathlib import Path as _Path
         import claude_code_queue.cli as cli_mod
 
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
         dest = tmp_path / ".claude" / "skills" / "queue" / "SKILL.md"
 
         with patch.object(_Path, "home", return_value=tmp_path):

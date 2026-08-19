@@ -187,10 +187,12 @@ def skill_home(tmp_path, monkeypatch):
     """
     Redirect Path.home() → tmp_path for the duration of one test.
 
-    install-skill writes to Path.home() / ".claude" / "skills" / "queue" / "SKILL.md".
-    By redirecting home, all file operations land in the test's temporary directory
-    without touching the real ~/.claude/ directory.
+    install-skill writes to <claude config dir> / "skills" / "queue" / "SKILL.md".
+    By redirecting home — and clearing CLAUDE_CONFIG_DIR so the developer's own
+    profile selection cannot leak in — all file operations land in the test's
+    temporary directory without touching a real profile.
     """
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     return tmp_path
 
@@ -207,6 +209,33 @@ class TestInstallSkillCommand:
     @staticmethod
     def _dest(home: Path) -> Path:
         return home / ".claude" / "skills" / "queue" / "SKILL.md"
+
+    def test_sk019_installs_into_the_active_profile(self, tmp_path, monkeypatch):
+        """SK-019: the destination follows CLAUDE_CONFIG_DIR.
+
+        Running several Claude Code profiles means several skills/ directories.
+        Hardcoding ~/.claude installs into whichever profile is not in use.
+        """
+        profile = tmp_path / ".claude-work-2"
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(profile))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        assert self._run() == 0
+        assert (profile / "skills" / "queue" / "SKILL.md").exists()
+        assert not self._dest(tmp_path).exists()
+
+    def test_sk020_profiles_install_independently(self, tmp_path, monkeypatch):
+        """SK-020: installing into one profile leaves the others alone."""
+        first, second = tmp_path / "p1", tmp_path / "p2"
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(first))
+        assert self._run() == 0
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(second))
+        assert self._run() == 0
+
+        assert (first / "skills" / "queue" / "SKILL.md").exists()
+        assert (second / "skills" / "queue" / "SKILL.md").exists()
 
     def test_sk009_fresh_install_returns_0(self, skill_home):
         """SK-009: First installation exits with code 0."""

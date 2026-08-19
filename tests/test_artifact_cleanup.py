@@ -15,7 +15,8 @@ import pytest
 
 from claude_code_queue.claude_interface import ClaudeCodeInterface
 from claude_code_queue.models import QueuedPrompt
-from claude_code_queue.queue_manager import QueueManager, _claude_config_dir
+from claude_code_queue.paths import claude_config_dir
+from claude_code_queue.queue_manager import QueueManager
 
 SESSION_ID = "11111111-2222-3333-4444-555555555555"
 OTHER_ID = "99999999-8888-7777-6666-555555555555"
@@ -47,22 +48,22 @@ def _mock_proc(stdout="done", stderr="", returncode=0):
 class TestClaudeConfigDir:
     def test_honours_claude_config_dir(self, tmp_path, monkeypatch):  # ART-001
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "custom"))
-        assert _claude_config_dir() == tmp_path / "custom"
+        assert claude_config_dir() == tmp_path / "custom"
 
     def test_falls_back_to_home_claude(self, tmp_path, monkeypatch):  # ART-002
         monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        assert _claude_config_dir() == tmp_path / ".claude"
+        assert claude_config_dir() == tmp_path / ".claude"
 
     def test_expands_user_tilde(self, monkeypatch):  # ART-003
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/somewhere")
-        assert _claude_config_dir() == Path.home() / "somewhere"
+        assert claude_config_dir() == Path.home() / "somewhere"
 
     def test_empty_value_falls_back(self, tmp_path, monkeypatch):  # ART-004
         """An exported-but-empty variable must not resolve to the process CWD."""
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", "")
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        assert _claude_config_dir() == tmp_path / ".claude"
+        assert claude_config_dir() == tmp_path / ".claude"
 
 
 class TestArtifactRemoval:

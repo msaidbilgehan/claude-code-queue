@@ -13,20 +13,7 @@ from typing import Optional, Callable, Dict, Any
 from .models import QueuedPrompt, QueueState, PromptStatus, ExecutionResult
 from .storage import QueueStorage
 from .claude_interface import ClaudeCodeInterface
-
-
-def _claude_config_dir() -> Path:
-    """Return Claude Code's config directory, honouring ``$CLAUDE_CONFIG_DIR``.
-
-    Claude Code writes its session artifacts under ``$CLAUDE_CONFIG_DIR`` when that
-    variable is set and under ``~/.claude`` otherwise. Assuming ``~/.claude``
-    unconditionally makes artifact cleanup a silent no-op for every user with a
-    custom config directory.
-    """
-    configured = os.environ.get("CLAUDE_CONFIG_DIR")
-    if configured:
-        return Path(configured).expanduser()
-    return Path.home() / ".claude"
+from .paths import claude_config_dir
 
 
 class QueueManager:
@@ -484,7 +471,7 @@ class QueueManager:
         characters. A session UUID is unique on its own, which makes the glob both
         simpler and exact.
         """
-        claude_dir = _claude_config_dir()
+        claude_dir = claude_config_dir()
         targets = [
             # Conversation log — parent directory name is unknown, matched by UUID.
             *claude_dir.glob(f"projects/*/{session_id}.jsonl"),
