@@ -39,7 +39,6 @@ class QueuedPrompt:
     rate_limited_at: Optional[datetime] = None
     reset_time: Optional[datetime] = None
     retry_not_before: Optional[datetime] = None  # Fix 3: earliest time for next generic retry
-    _resolved_working_directory: Optional[str] = field(default=None, repr=False)  # transient; not persisted to YAML
 
     def add_log(self, message: str) -> None:
         """Add a log entry with timestamp."""
@@ -255,6 +254,7 @@ class ExecutionResult:
     rate_limit_info: Optional[RateLimitInfo] = None
     execution_time: float = 0.0
     is_non_retryable: bool = False  # True if the error is permanent regardless of retry count
+    session_id: Optional[str] = None  # UUID passed via --session-id; None when the CLI lacks the flag
 
     @property
     def is_rate_limited(self) -> bool:
