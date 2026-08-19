@@ -8,6 +8,9 @@ A tool to queue Claude Code prompts and automatically execute them when token li
 -   **Automatic Rate Limit Handling**: Detects rate limits and waits for reset windows
 -   **Priority System**: Execute high-priority prompts first
 -   **Retry Logic**: Automatically retry failed and rate-limited prompts; both share the `max_retries` total-attempts counter
+-   **Session Resume**: An interrupted prompt continues its conversation instead of starting over
+-   **Session Listing**: Find any conversation's id and title to continue it later
+-   **Multiple Profiles**: Follows `CLAUDE_CONFIG_DIR`, so each Claude Code profile keeps its own skills and queue
 -   **Persistent Storage**: Queue survives system restarts
 -   **Prompt Bank**: Save and reuse templates for recurring tasks
 -   **Interactive Prompt Box**: Browse and select files interactively with fuzzy search
@@ -161,6 +164,47 @@ claude-queue start
 claude-queue start --verbose
 ```
 
+### Continuing an Interrupted Session
+
+When a queued prompt is interrupted — a usage limit, a crash, a timeout — the
+next attempt continues the same Claude Code conversation rather than starting
+from scratch, so work the interrupted attempt already finished is not repeated.
+This is automatic; nothing needs configuring.
+
+You can also queue a continuation of a session you were working in yourself.
+
+**Find a session:**
+
+```bash
+claude-queue sessions                   # this project, newest first
+claude-queue sessions --all             # every project
+claude-queue sessions --search parser   # filter by title
+claude-queue sessions --json            # machine-readable
+```
+
+```
+SESSION ID                            LAST ACTIVE  TITLE
+f5681db3-00b7-456d-9e50-07fdaa0e1ddf  just now     Refactor the parser
+bee6b34b-9893-49e0-8c26-0a44e05b2cce  2h ago       Fix the flaky test
+```
+
+**Queue its continuation:**
+
+```bash
+claude-queue resume-session                             # the session you are in
+claude-queue resume-session -m "Finish the migration"   # with explicit instructions
+claude-queue resume-session <session-id>                # some other session
+```
+
+With no arguments it uses `$CLAUDE_CODE_SESSION_ID`, so it can be run from inside
+the session that just hit the limit. At reset the queue reopens that conversation
+with its history intact.
+
+The continuation runs non-interactively via `claude --print --resume`, so its
+result lands in `~/.claude-queue/completed/` rather than back in your terminal.
+The session stays reopenable with `claude --resume <session-id>` afterwards, with
+the queue's work already in its history.
+
 ## Prompt Bank (Template Management)
 
 The Prompt Bank allows you to save and reuse templates for recurring tasks like daily documentation updates, weekly reports, or standard maintenance tasks.
@@ -281,7 +325,7 @@ The prompt box is built with Rust for fast file indexing and responsive UI, maki
 1. **Queue Processing**: Runs prompts in priority order (lower number = higher priority)
 2. **Rate Limit Detection**: Monitors Claude Code output for rate limit messages
 3. **Automatic Waiting**: When rate limited, parses the actual reset time from Claude's output when available; falls back to estimating the next 5-hour window boundary otherwise
-4. **Retry Logic**: Failed prompts are retried up to `max_retries` total attempts. Interrupted prompts (from crashes or ungraceful shutdowns) are automatically re-queued on the next startup — **at-least-once semantics apply**: a task that finished but whose result was not saved before a crash will run again. Design tasks to be idempotent where possible.
+4. **Retry Logic**: Failed prompts are retried up to `max_retries` total attempts, continuing the conversation the interrupted attempt started rather than repeating it from the beginning. Interrupted prompts (from crashes or ungraceful shutdowns) are automatically re-queued on the next startup — **at-least-once semantics apply**: a task that finished but whose result was not saved before a crash will run again. Design tasks to be idempotent where possible.
 5. **File Organization**:
     - `~/.claude-queue/queue/` - Pending prompts
     - `~/.claude-queue/completed/` - Successful executions
@@ -318,10 +362,56 @@ context_files: # Files to include as context
     - README.md
 max_retries: 3 # Maximum total execution attempts (1 = no retries, -1 = unlimited)
 estimated_tokens: 1000 # Estimated token usage (optional)
+resume_message: null # Sent when continuing an interrupted attempt (optional)
 ---
 ```
 
 **`max_retries` semantics:** this field controls the total number of execution attempts, not the number of retries after the first failure. `max_retries: 3` means 3 total attempts (initial + 2 retries); `max_retries: 1` means a single attempt with no retries; `max_retries: -1` means unlimited retries. Rate-limited executions and failure retries share the same counter.
+
+### Resume Message
+
+The message sent when continuing an interrupted session resolves most-specific
+first:
+
+1. `resume_message` in the prompt's frontmatter
+2. `resume_message:` in `.claude-queue.yaml` in the prompt's working directory
+3. `resume_message:` in `config.yaml` in the storage directory
+4. A built-in default
+
+```yaml
+# .claude-queue.yaml — applies to every prompt run in this project
+resume_message: >
+    Continue from where the previous attempt stopped. Check what is already
+    committed before changing anything.
+```
+
+Blank values fall through to the next level rather than resuming with an empty
+prompt, and a malformed config warns on stderr and falls back to the default
+instead of stopping the queue.
+
+`session_id` also appears in the frontmatter once a prompt has run. It is managed
+by the queue — it records the conversation to continue — and is not meant to be
+edited by hand.
+
+### Multiple Claude Code Profiles
+
+Claude Code keeps its state under `$CLAUDE_CONFIG_DIR` when that variable is set
+and `~/.claude` otherwise. The queue follows the same variable, so `install-skill`
+installs into the active profile and `sessions` lists that profile's
+conversations.
+
+Queued prompts run under the profile of the shell that started the processor, so
+give each profile its own queue directory:
+
+```bash
+CLAUDE_CONFIG_DIR=~/.claude-work claude-queue --storage-dir ~/.claude-queue-work start
+CLAUDE_CONFIG_DIR=~/.claude-work-2 claude-queue --storage-dir ~/.claude-queue-w2 start
+```
+
+Only one processor may run per storage directory. A second `start` on the same
+directory exits with an error instead of executing every prompt twice. Commands
+that only read or write files (`add`, `status`, `list`, `bank`, `sessions`) run
+freely alongside a running processor.
 
 ## Examples
 
@@ -398,7 +488,7 @@ When rate limited:
 2. The queue determines the reset time using a two-tier strategy:
     - **Parsed reset time**: extracts the actual reset time from Claude's output when available
     - **Estimated reset time**: falls back to estimating the next 5-hour window boundary (00:00–05:00, 05:00–10:00, 10:00–15:00, 15:00–20:00, 20:00–01:00) based on the current time
-3. Once the reset time is reached, the prompt is re-queued and execution resumes
+3. Once the reset time is reached, the prompt is re-queued and the conversation is continued from where it stopped, so work already done is not repeated
 
 ## Troubleshooting
 
