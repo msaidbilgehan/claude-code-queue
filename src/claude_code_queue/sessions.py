@@ -140,6 +140,25 @@ def read_session(path: Path) -> Optional[SessionInfo]:
     )
 
 
+def find_session(
+    session_id: str, claude_dir: Optional[Path] = None
+) -> Optional[SessionInfo]:
+    """Locate one session by id, or None when this profile has no such log.
+
+    Logs are named after the session, so this is a direct glob rather than a scan.
+    """
+    root = (claude_dir or claude_config_dir()) / "projects"
+    try:
+        candidates = sorted(root.glob(f"*/{session_id}.jsonl"))
+    except OSError:
+        return None
+    for path in candidates:
+        info = read_session(path)
+        if info is not None:
+            return info
+    return None
+
+
 def iter_session_files(claude_dir: Optional[Path] = None) -> Iterator[Path]:
     """Yield every session log under the active profile, newest first."""
     root = (claude_dir or claude_config_dir()) / "projects"

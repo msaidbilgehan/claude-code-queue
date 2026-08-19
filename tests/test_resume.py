@@ -9,6 +9,7 @@ which queues a continuation of a session the user was working in.
 Test IDs: RES-001..RES-030
 """
 
+import json
 import os
 import uuid
 from pathlib import Path
@@ -25,6 +26,7 @@ from claude_code_queue.config import (
     resolve_resume_message,
 )
 from claude_code_queue.models import ExecutionResult, PromptStatus, QueuedPrompt
+from claude_code_queue.sessions import find_session
 from claude_code_queue.storage import QueueStorage
 
 SESSION_ID = "11111111-2222-3333-4444-555555555555"
@@ -37,6 +39,20 @@ def _mock_proc(stdout="done", stderr="", returncode=0):
     proc.pid = 4242
     proc.wait.return_value = returncode
     return proc
+
+
+def _write_session_log(claude_dir, session_id=SESSION_ID, project="/Users/x/proj",
+                       title="Some session", encoded="-any-encoded-name"):
+    """Write a transcript shaped like Claude Code's, enough for find_session()."""
+    path = claude_dir / "projects" / encoded / f"{session_id}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    records = [
+        {"type": "user", "cwd": project, "gitBranch": "main",
+         "message": {"content": "do the thing"}},
+        {"type": "ai-title", "aiTitle": title},
+    ]
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+    return path
 
 
 def _write_config(path, message):
@@ -206,10 +222,62 @@ class TestResumeSessionCommand:
         prompt = QueueStorage(str(tmp_path)).load_queue_state().prompts[0]
         assert prompt.resume_message == "finish the migration"
 
-    def test_working_directory_is_resolved(self, tmp_path):  # RES-035
+    def test_explicit_working_directory_is_resolved(self, tmp_path):  # RES-035
         project = tmp_path / "proj"
         project.mkdir()
         assert self._run(tmp_path, SESSION_ID, "-d", str(project)) == 0
         prompt = QueueStorage(str(tmp_path)).load_queue_state().prompts[0]
         assert Path(prompt.working_directory).is_absolute()
         assert Path(prompt.working_directory).resolve() == project.resolve()
+
+    def test_defaults_to_the_session_own_directory(self, tmp_path, monkeypatch):  # RES-036
+        """A session belongs to the directory it was working in. Resuming it from
+        elsewhere would run the conversation against the wrong files."""
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "profile"))
+        elsewhere = tmp_path / "somewhere-else"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+        _write_session_log(tmp_path / "profile", project="/Users/x/the-real-project")
+
+        assert self._run(tmp_path, SESSION_ID) == 0
+        prompt = QueueStorage(str(tmp_path)).load_queue_state().prompts[0]
+        assert prompt.working_directory == "/Users/x/the-real-project"
+
+    def test_explicit_directory_overrides_the_session(self, tmp_path, monkeypatch):  # RES-037
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "profile"))
+        _write_session_log(tmp_path / "profile", project="/Users/x/the-real-project")
+        override = tmp_path / "override"
+        override.mkdir()
+
+        assert self._run(tmp_path, SESSION_ID, "-d", str(override)) == 0
+        prompt = QueueStorage(str(tmp_path)).load_queue_state().prompts[0]
+        assert Path(prompt.working_directory).resolve() == override.resolve()
+
+    def test_unknown_session_falls_back_and_warns(self, tmp_path, monkeypatch, capsys):  # RES-038
+        """The session may live in another profile; say so rather than pretending."""
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "empty-profile"))
+        here = tmp_path / "here"
+        here.mkdir()
+        monkeypatch.chdir(here)
+
+        assert self._run(tmp_path, SESSION_ID) == 0
+        assert "no log for session" in capsys.readouterr().err
+        prompt = QueueStorage(str(tmp_path)).load_queue_state().prompts[0]
+        assert Path(prompt.working_directory).resolve() == here.resolve()
+
+    def test_shows_the_session_title(self, tmp_path, monkeypatch, capsys):  # RES-039
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "profile"))
+        _write_session_log(tmp_path / "profile", title="Refactor the parser")
+        self._run(tmp_path, SESSION_ID)
+        assert "Refactor the parser" in capsys.readouterr().out
+
+
+class TestFindSession:
+    def test_finds_a_session_by_id(self, tmp_path, monkeypatch):  # RES-040
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        _write_session_log(tmp_path, title="Refactor the parser")
+        assert find_session(SESSION_ID).title == "Refactor the parser"
+
+    def test_missing_session_is_not_an_error(self, tmp_path, monkeypatch):  # RES-041
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+        assert find_session(SESSION_ID) is None

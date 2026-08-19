@@ -201,6 +201,10 @@ With no arguments it uses `$CLAUDE_CODE_SESSION_ID`, so it can be run from insid
 the session that just hit the limit. At reset the queue reopens that conversation
 with its history intact.
 
+The continuation runs in the directory the session was working in, whichever
+directory you queue it from — a conversation resumed somewhere else would be
+pointed at the wrong files. Pass `-d` to override.
+
 The continuation runs non-interactively via `claude --print --resume`, so its
 result lands in `~/.claude-queue/completed/` rather than back in your terminal.
 The session stays reopenable with `claude --resume <session-id>` afterwards, with

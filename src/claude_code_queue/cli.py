@@ -26,7 +26,7 @@ from .storage import QueueStorage
 from .models import QueuedPrompt, PromptStatus
 from .config import PROJECT_CONFIG_FILENAME, resolve_resume_message
 from .paths import claude_config_dir
-from .sessions import list_sessions
+from .sessions import find_session, list_sessions
 
 
 def main():
@@ -178,8 +178,8 @@ Examples:
         help="Priority (lower = higher priority)",
     )
     resume_parser.add_argument(
-        "--working-dir", "-d", default=".",
-        help="Directory the continuation runs in (default: current directory)",
+        "--working-dir", "-d",
+        help="Directory the continuation runs in (default: the session's own)",
     )
 
     add_parser = subparsers.add_parser("add", help="Add a prompt to the queue")
@@ -507,7 +507,26 @@ def cmd_resume_session(args) -> int:
         )
         return 1
 
-    working_dir = str(Path(args.working_dir).expanduser().resolve())
+    # A session belongs to the directory it was working in. Defaulting to the
+    # caller's directory instead would resume the conversation somewhere else
+    # entirely — wrong files, wrong repository — which is never what "continue
+    # this session" means.
+    known = find_session(session_id)
+    if args.working_dir is not None:
+        working_dir = str(Path(args.working_dir).expanduser().resolve())
+    elif known and known.project_dir:
+        working_dir = known.project_dir
+    else:
+        working_dir = os.getcwd()
+
+    if known is None:
+        print(
+            f"Warning: no log for session {session_id} in this profile. It may "
+            "belong to another CLAUDE_CONFIG_DIR, in which case resuming it will "
+            "fail when the queue runs.",
+            file=sys.stderr,
+        )
+
     storage = QueueStorage(storage_dir=args.storage_dir)
     prompt = QueuedPrompt(
         content=(
@@ -528,6 +547,8 @@ def cmd_resume_session(args) -> int:
 
     message = resolve_resume_message(args.message, working_dir, args.storage_dir)
     print(f"✓ Queued continuation of session {session_id} as prompt {prompt.id}")
+    if known is not None:
+        print(f"  Session: {known.title}")
     print(f"  Working directory: {working_dir}")
     print(f"  Will send: {message}")
     return 0

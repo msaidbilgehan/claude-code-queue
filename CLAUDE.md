@@ -96,7 +96,9 @@ its conversation on the next attempt instead of starting over.
   Code's directory name, which rewrites `.` and `_` as well as `/`.
 - `claude-queue resume-session [SESSION_ID]` queues a continuation of an existing
   conversation, defaulting to `$CLAUDE_CODE_SESSION_ID` so it can be run from
-  inside the session that hit the limit. The continuation runs non-interactively
+  inside the session that hit the limit. The continuation runs in the directory
+  the session itself recorded, not the caller's — resuming a conversation
+  somewhere else would point it at the wrong files. `-d` overrides that. The continuation runs non-interactively
   via `--print`; the session stays reopenable with `claude --resume <id>`.
 
 ### Resume Message Resolution
