@@ -71,26 +71,56 @@ Tasks should be idempotent where possible.
 3. **Reset time**: parsed from `usage limit reached|<unix_ts>`, ISO timestamps, or estimated from 5-hour UTC boundaries (00, 05, 10, 15, 20)
 4. **Cap**: max 24 hours into the future (SC4 — prevents queue stall)
 
-### Rate-Limit Artifact Cleanup
-A rate-limited `claude --print` still writes a conversation log, a todo stub, a
-debug transcript, and telemetry events — thousands per rate-limit window, enough
-to bog down the Claude Code UI. `QueueManager._do_cleanup_rate_limit_artifacts()`
-removes them on the rate-limit path only.
+### Resuming Interrupted Work
+A queued job that is interrupted — a usage limit, a crash, a timeout — continues
+its conversation on the next attempt instead of starting over.
 
-- **Correlation is exact, never heuristic.** `execute_prompt()` generates a UUID
-  and passes it as `--session-id`, so every artifact path is a known name for a
-  file this run created. When the UUID is unavailable the cleanup does nothing —
-  identifying files by size/mtime risks deleting an unrelated session's history.
-- **`--session-id` is feature-detected** once at startup (`--help` scan). Older
-  CLIs reject the unknown flag, which would fail every queued prompt.
-- **Config directory honours `$CLAUDE_CONFIG_DIR`**, falling back to `~/.claude`
-  (`_claude_config_dir()`). Hardcoding `~/.claude` makes cleanup a silent no-op
-  for anyone using a custom config directory.
-- **The conversation log is found via `projects/*/<uuid>.jsonl`**, not by
-  rebuilding Claude Code's encoded project-directory name. That encoding rewrites
-  `.` and `_` to `-` as well as `/`, so recomputing it silently misses any project
-  path containing those characters.
-- Depends on undocumented Claude Code internals (`projects/`, `todos/`, `debug/`,
+- `execute_prompt()` generates a session UUID and passes `--session-id`;
+  `_process_execution_result()` records it on the prompt, and `storage.py`
+  persists it as `session_id` frontmatter.
+- Any later attempt sees `session_id` set and switches to `--resume <uuid>`,
+  sending the resume message rather than the original instruction. Re-sending the
+  instruction would invite redoing finished work; context files are skipped for
+  the same reason (they are already in the conversation).
+- `--resume` reuses the same session, so one prompt yields one conversation log
+  however many times it is interrupted.
+- Both `--session-id` and `--resume` are feature-detected once at startup from
+  `--help` (`_detect_supported_flags()`). A CLI predating either flag rejects it
+  outright, which would fail every queued prompt; without them the queue simply
+  starts fresh each attempt.
+- `claude-queue resume-session [SESSION_ID]` queues a continuation of an existing
+  conversation, defaulting to `$CLAUDE_CODE_SESSION_ID` so it can be run from
+  inside the session that hit the limit. The continuation runs non-interactively
+  via `--print`; the session stays reopenable with `claude --resume <id>`.
+
+### Resume Message Resolution
+`config.resolve_resume_message()`, most specific first:
+
+1. the prompt's `resume_message` frontmatter
+2. `.claude-queue.yaml` in the prompt's working directory (project)
+3. `config.yaml` in the storage directory (queue-wide, so per-profile)
+4. `config.DEFAULT_RESUME_MESSAGE`
+
+Blank and non-string values count as unset and fall through, so clearing a field
+never resumes with an empty prompt. A malformed config warns on stderr and falls
+back — a daemon that refuses to start over a stray tab in YAML is worse than one
+running on defaults.
+
+### Session Artifact Cleanup
+Each run leaves a todo stub, a debug transcript, and telemetry events under the
+Claude Code config directory. `_do_cleanup_session_artifacts()` removes them when
+a prompt reaches a terminal state (COMPLETED or FAILED).
+
+- **The conversation log is kept.** While the prompt is retryable it is the state
+  `--resume` continues from; afterwards it is the record of what the run did.
+  Because retries resume, logs no longer accumulate per attempt.
+- **Correlation is exact, never heuristic.** Every path is built from the session
+  UUID the queue generated, so no size or mtime guessing is involved and no other
+  session can match.
+- **Config directory honours `$CLAUDE_CONFIG_DIR`** (`paths.claude_config_dir()`).
+  Hardcoding `~/.claude` makes cleanup a silent no-op for anyone using a custom
+  config directory, and installs skills into the wrong profile.
+- Depends on undocumented Claude Code internals (`todos/`, `debug/`,
   `telemetry/`). If the layout changes, cleanup stops finding files — safe, since
   nothing outside these session-scoped names is ever touched. Failures are logged
   and swallowed so `save_queue_state()` always runs.
@@ -209,6 +239,8 @@ last_executed: null
 rate_limited_at: null
 reset_time: null
 retry_not_before: null
+session_id: null         # set after attempt 1; makes retries resume it
+resume_message: null     # overrides the configured resume message
 ---
 ```
 
@@ -218,6 +250,7 @@ retry_not_before: null
 |---|---|---|
 | `start [--verbose] [--no-skip-permissions]` | Run queue loop | Yes |
 | `add <prompt> [-p priority]` | Quick-add prompt | No |
+| `resume-session [id] [-m msg]` | Queue a continuation of an existing session | No |
 | `template <name> [-p priority]` | Create template .md | No |
 | `status [--json] [--detailed]` | Queue stats | No |
 | `list [--status <s>] [--json]` | List prompts | No |
