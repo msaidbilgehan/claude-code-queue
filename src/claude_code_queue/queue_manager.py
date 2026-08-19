@@ -13,6 +13,7 @@ from typing import Optional, Callable, Dict, Any
 from .models import QueuedPrompt, QueueState, PromptStatus, ExecutionResult
 from .storage import QueueStorage
 from .claude_interface import ClaudeCodeInterface
+from .locking import QueueLock, QueueLockError
 from .paths import claude_config_dir
 
 
@@ -29,6 +30,8 @@ class QueueManager:
         generic_failure_retry_delay: int = 60,
     ):
         self.storage = QueueStorage(storage_dir)
+        # Guards the execution loop only; storage-only commands stay lock-free.
+        self._lock = QueueLock(self.storage.base_dir)
         self.claude_interface = ClaudeCodeInterface(claude_command, timeout,
                                                     skip_permissions=skip_permissions)
         self.check_interval = check_interval
@@ -63,14 +66,27 @@ class QueueManager:
         self.claude_interface.kill_current()  # unblocks communicate() if executing
         self.stop()
 
-    def start(self, callback: Optional[Callable[[QueueState], None]] = None) -> None:
-        """Start the queue processing loop."""
+    def start(self, callback: Optional[Callable[[QueueState], None]] = None) -> bool:
+        """Start the queue processing loop.
+
+        Returns True once the loop has run and shut down, False when the processor
+        declined to start — the storage directory is already being processed, or
+        the claude CLI is unreachable. Callers map this to their exit status so a
+        supervisor sees a failed start as a failure.
+        """
         print("Starting Claude Code Queue Manager...")
+
+        try:
+            self._lock.acquire()
+        except QueueLockError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return False
 
         is_working, message = self.claude_interface.test_connection()
         if not is_working:
             print(f"Error: {message}")
-            return
+            self._lock.release()
+            return False
 
         print(f"✓ {message}")
 
@@ -121,6 +137,8 @@ class QueueManager:
         finally:
             self._shutdown()
 
+        return True
+
     def stop(self) -> None:
         """Stop the queue processing loop."""
         self.running = False
@@ -153,6 +171,7 @@ class QueueManager:
             print("✓ Queue state saved")
 
         print("Queue manager stopped")
+        self._lock.release()
 
     def _process_queue_iteration(
         self, callback: Optional[Callable[[QueueState], None]] = None

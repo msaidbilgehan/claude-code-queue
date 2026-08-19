@@ -37,6 +37,7 @@ from claude_code_queue.models import (
     QueueState,
     RateLimitInfo,
 )
+from claude_code_queue.locking import QueueLock
 from claude_code_queue.queue_manager import QueueManager
 from claude_code_queue.storage import MarkdownPromptParser, QueueStorage
 
@@ -172,6 +173,7 @@ def mgr(tmp_path, mock_iface):
     """QueueManager with real storage and mocked claude interface (running=False)."""
     m = QueueManager.__new__(QueueManager)
     m.storage = QueueStorage(str(tmp_path))
+    m._lock = QueueLock(m.storage.base_dir)
     m.claude_interface = mock_iface
     m.check_interval = 30
     m.running = False
@@ -1215,6 +1217,7 @@ class TestSIGKILLRecovery:
         """QueueManager with running=True (needed for shutdown tests)."""
         m = QueueManager.__new__(QueueManager)
         m.storage = QueueStorage(str(tmp_path))
+        m._lock = QueueLock(m.storage.base_dir)
         m.claude_interface = mock_iface
         m.check_interval = 30
         m.running = True
@@ -1497,6 +1500,7 @@ def test_startup_connection_failure_prevents_queue_loop(tmp_path):  # FT-070
 
     manager = QueueManager.__new__(QueueManager)
     manager.storage = QueueStorage(str(tmp_path))
+    manager._lock = QueueLock(manager.storage.base_dir)
     manager.claude_interface = mock_iface
     manager.check_interval = 30
     manager.running = False
@@ -1674,6 +1678,7 @@ def test_startup_auth_failure_prevents_start(tmp_path):  # FT-079
 
     manager = QueueManager.__new__(QueueManager)
     manager.storage = QueueStorage(str(tmp_path))
+    manager._lock = QueueLock(manager.storage.base_dir)
     manager.claude_interface = mock_iface
     manager.check_interval = 30
     manager.running = False

@@ -310,8 +310,8 @@ def cmd_start(args) -> int:
             stats = state.get_stats()
             print(f"Queue status: {stats['status_counts']}")
 
-    manager.start(callback=status_callback if args.verbose else None)
-    return 0
+    started = manager.start(callback=status_callback if args.verbose else None)
+    return 0 if started else 1
 
 
 def cmd_add(args) -> int:

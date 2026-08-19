@@ -102,6 +102,26 @@ removes them on the rate-limit path only.
 - Non-retryable errors (e.g., nested Claude session) → immediate FAILED, no retry budget consumed
 - Terminal status blocklist in `can_retry()`: COMPLETED and CANCELLED never retry
 
+### Single-Writer Lock
+`QueueManager.start()` takes an advisory exclusive lock on the storage directory
+(`.queue.lock`, `locking.QueueLock`) and refuses to start if another processor
+holds it.
+
+- **Why**: each tick reloads every prompt file, claims the highest-priority one,
+  and rewrites `queue-state.json` wholesale. Two processors on one directory
+  claim the same prompt — executing the task twice — and clobber each other's
+  counters. Queued tasks are advised to be idempotent, never required to be.
+- **`flock`/`msvcrt`, not a marker file**: the kernel holds the lock for the life
+  of the file descriptor, so it is released even on SIGKILL. There is no stale
+  lock to clear. The lock file is deliberately *not* unlinked on release —
+  unlinking lets a second processor lock an orphaned inode.
+- **Scope**: only `start` locks. Storage-only commands (`add`, `status`, `list`,
+  `bank`, `batch`) run freely alongside a live processor.
+- **Exit status**: `start()` returns False when it declines to start (locked, or
+  the claude CLI is unreachable); `cmd_start` maps that to exit code 1 so a
+  supervisor sees a failed start as a failure.
+- **Running several profiles**: give each its own `--storage-dir`.
+
 ### Signal Handling
 - SIGINT/SIGTERM → `kill_current()` sends SIGTERM to process group, daemon thread escalates to SIGKILL after 3s
 - Signal handler uses `os.write(2, ...)` (not `print()`) to avoid stream-lock re-entrance
