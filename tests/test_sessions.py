@@ -10,12 +10,13 @@ Test IDs: SES-001..SES-030
 
 import json
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from claude_code_queue.cli import main
+from claude_code_queue.cli import _format_age, main
 from claude_code_queue.sessions import (
     MAX_SCAN_LINES,
     list_sessions,
@@ -156,6 +157,35 @@ class TestListSessions:
                    ai_title="in profile two")
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(second))
         assert [s.title for s in list_sessions()] == ["in profile two"]
+
+
+class TestAgeFormatting:
+    @pytest.mark.parametrize(
+        "delta,expected",
+        [
+            (timedelta(seconds=0), "just now"),
+            (timedelta(seconds=59), "just now"),
+            (timedelta(seconds=60), "1m ago"),
+            (timedelta(minutes=59), "59m ago"),
+            (timedelta(hours=1), "1h ago"),
+            (timedelta(hours=23, minutes=59), "23h ago"),
+            (timedelta(hours=24), "1d ago"),
+            (timedelta(hours=25), "1d ago"),
+            (timedelta(days=2, hours=12), "2d ago"),
+            (timedelta(days=364), "364d ago"),
+        ],
+    )
+    def test_rolls_over_on_readable_units(self, delta, expected):  # SES-040
+        """Hours must roll into days at a day, not linger to 60h."""
+        assert _format_age(datetime.now() - delta) == expected
+
+    def test_falls_back_to_a_date_after_a_year(self):  # SES-041
+        moment = datetime.now() - timedelta(days=400)
+        assert _format_age(moment) == moment.strftime("%Y-%m-%d")
+
+    def test_future_timestamps_do_not_go_negative(self):  # SES-042
+        """Clock skew or a copied file can date a log slightly ahead."""
+        assert _format_age(datetime.now() + timedelta(hours=1)) == "just now"
 
 
 class TestSessionsCommand:

@@ -403,17 +403,22 @@ def cmd_add(args) -> int:
 
 
 def _format_age(moment: datetime) -> str:
-    """Render how long ago *moment* was, compactly enough for a table column."""
+    """Render how long ago *moment* was, compactly enough for a table column.
+
+    Rolls over on the units people actually read by — minutes at an hour, hours
+    at a day — and gives up on relative time after a year, where a date says more.
+    """
     seconds = max(0, int((datetime.now() - moment).total_seconds()))
     if seconds < 60:
         return "just now"
-    for size, suffix in ((60, "m"), (3600, "h"), (86400, "d")):
-        if seconds < size * 60 or suffix == "d":
-            if suffix == "d":
-                break
-            return f"{seconds // size}{suffix} ago"
+    if seconds < 3600:
+        return f"{seconds // 60}m ago"
+    if seconds < 86400:
+        return f"{seconds // 3600}h ago"
     days = seconds // 86400
-    return f"{days}d ago" if days < 365 else moment.strftime("%Y-%m-%d")
+    if days < 365:
+        return f"{days}d ago"
+    return moment.strftime("%Y-%m-%d")
 
 
 def cmd_sessions(args) -> int:
