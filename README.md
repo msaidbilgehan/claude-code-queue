@@ -10,7 +10,7 @@ A tool to queue Claude Code prompts and automatically execute them when token li
 -   **Retry Logic**: Automatically retry failed and rate-limited prompts; both share the `max_retries` total-attempts counter
 -   **Session Resume**: An interrupted prompt continues its conversation instead of starting over
 -   **Session Listing**: Find any conversation's id and title to continue it later
--   **Multiple Profiles**: Follows `CLAUDE_CONFIG_DIR`, so each Claude Code profile keeps its own skills and queue
+-   **Multiple Accounts**: Each prompt records the Claude Code profile that pays for it; limits are tracked per account, so one exhausted account does not idle the rest
 -   **Persistent Storage**: Queue survives system restarts
 -   **Prompt Bank**: Save and reuse templates for recurring tasks
 -   **Interactive Prompt Box**: Browse and select files interactively with fuzzy search
@@ -205,6 +205,10 @@ The continuation runs in the directory the session was working in, whichever
 directory you queue it from — a conversation resumed somewhere else would be
 pointed at the wrong files. Pass `-d` to override.
 
+If the account you were working on is the one that ran out, continue the session
+on a different one with `--profile`; see
+[Multiple Claude Code Profiles](#multiple-claude-code-profiles-multiple-accounts).
+
 The continuation runs non-interactively via `claude --print --resume`, so its
 result lands in `~/.claude-queue/completed/` rather than back in your terminal.
 The session stays reopenable with `claude --resume <session-id>` afterwards, with
@@ -398,39 +402,105 @@ instead of stopping the queue.
 by the queue — it records the conversation to continue — and is not meant to be
 edited by hand.
 
-### Multiple Claude Code Profiles
+### Multiple Claude Code Profiles (Multiple Accounts)
 
 Claude Code keeps its state under `$CLAUDE_CONFIG_DIR` when that variable is set
-and `~/.claude` otherwise. The queue follows the same variable, so `install-skill`
-installs into the active profile and `sessions` lists that profile's
-conversations.
+and `~/.claude` otherwise. Each config directory holds its own credentials, so
+**a profile is an account, with its own usage limit**. Running a personal profile
+and two work profiles means three separate limits — and three separate bills.
 
-Each config directory holds its own credentials, so the profile decides which
-account pays for a prompt. That choice is recorded when the prompt is queued, not
-left to whichever profile the processor happens to run under:
+The queue follows the same variable, so `install-skill` installs into the active
+profile and `sessions` lists that profile's conversations.
+
+#### Choosing which account pays
+
+The profile is recorded on the prompt when it is queued, not left to whichever
+profile the processor happens to run under. Three equivalent forms:
 
 ```bash
-CLAUDE_CONFIG_DIR=~/.claude-work claude-queue add "work task"
-claude-queue add "personal task" --profile ~/.claude
+# the active profile — whatever $CLAUDE_CONFIG_DIR points at
+claude-queue add "a task"
+
+# a different profile, for this command only
+claude-queue add "a task" --profile ~/.claude-personal
+
+# or by environment, for the whole shell
+CLAUDE_CONFIG_DIR=~/.claude-personal claude-queue add "a task"
 ```
 
-One processor then serves every account, because **usage limits are tracked per
-account**. When one profile hits its limit the queue keeps running work billed to
-the others and returns to the limited one after its window reopens:
+Each prints what it recorded, so the account is never a guess:
 
 ```
-$ claude-queue add "zebra task"                    # → ~/.claude-work
-$ claude-queue add "personal task" --profile ~/.claude
-# ~/.claude-work hits its limit → the personal task keeps going
+✓ Added prompt 4cb9ea14 to queue
+  Profile: /Users/you/.claude-personal
 ```
 
-A prompt with no recorded profile bills to whatever the processor is running
-under, and is rate-limited together with it.
+The same applies to `resume-session`.
 
-Only one processor may run per storage directory. A second `start` on the same
-directory exits with an error instead of executing every prompt twice. Commands
-that only read or write files (`add`, `status`, `list`, `bank`, `sessions`) run
-freely alongside a running processor.
+#### Scenario: spreading work across accounts
+
+Queue everything into one queue and label each job with the account that should
+pay for it:
+
+```bash
+claude-queue add "refactor the parser"  --profile ~/.claude-work   -p 1
+claude-queue add "write release notes"  --profile ~/.claude-work-2 -p 1
+claude-queue add "tidy my dotfiles"     --profile ~/.claude        -p 5
+claude-queue start
+```
+
+**Limits are tracked per account.** When `~/.claude-work` hits its limit, the
+processor keeps running the jobs billed to the other two and comes back to the
+work account once its window reopens. A single exhausted account no longer idles
+the whole queue.
+
+#### Scenario: your session hits the limit — continue it on another account
+
+A session started on one account can be continued on another. The transcript
+lives on disk, so `--resume` replays it as context; the account only decides who
+pays.
+
+```bash
+# from inside the session that hit the limit
+claude-queue sessions                                   # find its id
+claude-queue resume-session <session-id> --profile ~/.claude-personal
+claude-queue start
+```
+
+The continuation picks the conversation up with its full history — work already
+done is not repeated — and spends the personal account's budget instead of the
+exhausted one.
+
+This depends on the other profile being able to see the transcript. Each profile
+stores conversations under its own `projects/` directory, so cross-account
+resume works when profiles share that directory (symlinking it, for example) and
+not otherwise.
+
+#### What the queue cannot tell you
+
+Claude Code does not record which account created a session — there is no account
+field in the transcript. The queue therefore cannot warn you that you are
+continuing a conversation on a different account's budget. Picking the right
+profile is your call; the queue only makes the choice explicit and visible.
+
+#### Prompts with no profile recorded
+
+A prompt queued by hand, or before this field existed, has no `claude_config_dir`.
+It bills to whatever the processor is running under and is rate-limited together
+with it, rather than looking like a separate account and dodging a limit it
+actually shares. Add the field to pin it down:
+
+```yaml
+claude_config_dir: /Users/you/.claude-work
+```
+
+#### One processor per storage directory
+
+A second `start` on the same storage directory exits with an error instead of
+executing every prompt twice. With per-prompt profiles a single processor already
+covers every account, so a second one is rarely wanted. Commands that only read
+or write files (`add`, `status`, `list`, `bank`, `sessions`) run freely alongside
+a running processor.
 
 ## Examples
 
