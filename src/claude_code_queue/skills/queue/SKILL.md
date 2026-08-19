@@ -49,6 +49,9 @@ claude-queue start
 # Cancel a queued prompt
 claude-queue cancel <prompt-id>
 
+# List sessions (ids + titles) for the current project
+claude-queue sessions
+
 # Continue THIS session later, when the usage limit resets
 claude-queue resume-session
 ```
@@ -63,6 +66,17 @@ claude-queue resume-session                              # continues this sessio
 claude-queue resume-session -m "Finish the migration"    # with explicit instructions
 claude-queue resume-session <session-id>                 # some other session
 ```
+
+To continue an *earlier* session, find its id first:
+
+```bash
+claude-queue sessions                    # this project, newest first
+claude-queue sessions --all              # every project
+claude-queue sessions --search parser    # filter by title
+```
+
+Each row is a session id and the title Claude Code generated for it, so the id
+can be copied straight into `resume-session`.
 
 With no arguments it uses `$CLAUDE_CODE_SESSION_ID`, so it works from inside the
 session that hit the limit. At reset the queue reopens that conversation — the

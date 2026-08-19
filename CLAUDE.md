@@ -88,6 +88,12 @@ its conversation on the next attempt instead of starting over.
   `--help` (`_detect_supported_flags()`). A CLI predating either flag rejects it
   outright, which would fail every queued prompt; without them the queue simply
   starts fresh each attempt.
+- `claude-queue sessions` lists conversations newest first with the id
+  `resume-session` needs. `sessions.py` reads only each transcript's opening
+  records — the generated `aiTitle` sits around line 11, so a line and byte cap
+  with an early exit keeps a listing from reading hundreds of megabytes. Project
+  filtering matches the `cwd` recorded inside the log rather than decoding Claude
+  Code's directory name, which rewrites `.` and `_` as well as `/`.
 - `claude-queue resume-session [SESSION_ID]` queues a continuation of an existing
   conversation, defaulting to `$CLAUDE_CODE_SESSION_ID` so it can be run from
   inside the session that hit the limit. The continuation runs non-interactively
@@ -250,6 +256,7 @@ resume_message: null     # overrides the configured resume message
 |---|---|---|
 | `start [--verbose] [--no-skip-permissions]` | Run queue loop | Yes |
 | `add <prompt> [-p priority]` | Quick-add prompt | No |
+| `sessions [--all] [--search t]` | List session ids and titles | No |
 | `resume-session [id] [-m msg]` | Queue a continuation of an existing session | No |
 | `template <name> [-p priority]` | Create template .md | No |
 | `status [--json] [--detailed]` | Queue stats | No |

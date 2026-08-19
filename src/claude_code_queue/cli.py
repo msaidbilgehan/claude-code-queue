@@ -26,6 +26,7 @@ from .storage import QueueStorage
 from .models import QueuedPrompt, PromptStatus
 from .config import PROJECT_CONFIG_FILENAME, resolve_resume_message
 from .paths import claude_config_dir
+from .sessions import list_sessions
 
 
 def main():
@@ -119,6 +120,34 @@ Examples:
         action="store_true",
         default=False,
         help="Do not pass --dangerously-skip-permissions to claude (requires confirmation dialogs)",
+    )
+
+    sessions_parser = subparsers.add_parser(
+        "sessions",
+        help="List Claude Code sessions with their ids and titles",
+        description=(
+            "List Claude Code conversations, newest first, with the session id "
+            "`resume-session` needs. Defaults to sessions started in the current "
+            "directory."
+        ),
+    )
+    sessions_parser.add_argument(
+        "--all", "-a", action="store_true",
+        help="Every project, not just the current directory",
+    )
+    sessions_parser.add_argument(
+        "--project", "-d",
+        help="List sessions for this directory instead of the current one",
+    )
+    sessions_parser.add_argument(
+        "--search", "-s", help="Only sessions whose title contains this text",
+    )
+    sessions_parser.add_argument(
+        "--limit", "-n", type=int, default=20,
+        help="Maximum sessions to show (default: 20, 0 for no limit)",
+    )
+    sessions_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON",
     )
 
     resume_parser = subparsers.add_parser(
@@ -311,6 +340,8 @@ Examples:
             return cmd_bank(args)
         elif args.command == "batch":
             return cmd_batch(args)
+        elif args.command == "sessions":
+            return cmd_sessions(args)
         elif args.command == "resume-session":
             return cmd_resume_session(args)
         elif args.command == "install-skill":
@@ -369,6 +400,59 @@ def cmd_add(args) -> int:
     if success:
         print(f"✓ Added prompt {prompt.id} to queue")
     return 0 if success else 1
+
+
+def _format_age(moment: datetime) -> str:
+    """Render how long ago *moment* was, compactly enough for a table column."""
+    seconds = max(0, int((datetime.now() - moment).total_seconds()))
+    if seconds < 60:
+        return "just now"
+    for size, suffix in ((60, "m"), (3600, "h"), (86400, "d")):
+        if seconds < size * 60 or suffix == "d":
+            if suffix == "d":
+                break
+            return f"{seconds // size}{suffix} ago"
+    days = seconds // 86400
+    return f"{days}d ago" if days < 365 else moment.strftime("%Y-%m-%d")
+
+
+def cmd_sessions(args) -> int:
+    """List Claude Code sessions so a session id can be found without guesswork.
+
+    Scoped to the current directory by default: the question is almost always
+    "which of my sessions in this project was that one?".
+    """
+    project = None if args.all else (args.project or os.getcwd())
+    limit = None if args.limit == 0 else args.limit
+    found = list_sessions(project_dir=project, search=args.search, limit=limit)
+
+    if args.json:
+        print(json.dumps([s.to_dict() for s in found], indent=2, ensure_ascii=False))
+        return 0
+
+    if not found:
+        where = "any project" if args.all else f"{project}"
+        print(f"No Claude Code sessions found for {where}.")
+        if not args.all:
+            print("Use --all to list sessions from every project.")
+        return 0
+
+    ages = [_format_age(s.last_active) for s in found]
+    age_width = max([len("LAST ACTIVE")] + [len(a) for a in ages])
+    print(f"{'SESSION ID':36}  {'LAST ACTIVE'.ljust(age_width)}  TITLE")
+    for session, age in zip(found, ages):
+        title = session.title
+        if len(title) > 68:
+            title = title[:67] + "…"
+        print(f"{session.session_id:36}  {age.ljust(age_width)}  {title}")
+
+    if args.all:
+        print()
+        print("Project directories vary; use --project DIR to narrow the list.")
+    print()
+    print("Continue one when the limit resets:")
+    print(f"  claude-queue resume-session {found[0].session_id}")
+    return 0
 
 
 def cmd_resume_session(args) -> int:
