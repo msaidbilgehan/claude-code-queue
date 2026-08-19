@@ -71,6 +71,30 @@ Tasks should be idempotent where possible.
 3. **Reset time**: parsed from `usage limit reached|<unix_ts>`, ISO timestamps, or estimated from 5-hour UTC boundaries (00, 05, 10, 15, 20)
 4. **Cap**: max 24 hours into the future (SC4 — prevents queue stall)
 
+### Rate-Limit Artifact Cleanup
+A rate-limited `claude --print` still writes a conversation log, a todo stub, a
+debug transcript, and telemetry events — thousands per rate-limit window, enough
+to bog down the Claude Code UI. `QueueManager._do_cleanup_rate_limit_artifacts()`
+removes them on the rate-limit path only.
+
+- **Correlation is exact, never heuristic.** `execute_prompt()` generates a UUID
+  and passes it as `--session-id`, so every artifact path is a known name for a
+  file this run created. When the UUID is unavailable the cleanup does nothing —
+  identifying files by size/mtime risks deleting an unrelated session's history.
+- **`--session-id` is feature-detected** once at startup (`--help` scan). Older
+  CLIs reject the unknown flag, which would fail every queued prompt.
+- **Config directory honours `$CLAUDE_CONFIG_DIR`**, falling back to `~/.claude`
+  (`_claude_config_dir()`). Hardcoding `~/.claude` makes cleanup a silent no-op
+  for anyone using a custom config directory.
+- **The conversation log is found via `projects/*/<uuid>.jsonl`**, not by
+  rebuilding Claude Code's encoded project-directory name. That encoding rewrites
+  `.` and `_` to `-` as well as `/`, so recomputing it silently misses any project
+  path containing those characters.
+- Depends on undocumented Claude Code internals (`projects/`, `todos/`, `debug/`,
+  `telemetry/`). If the layout changes, cleanup stops finding files — safe, since
+  nothing outside these session-scoped names is ever touched. Failures are logged
+  and swallowed so `save_queue_state()` always runs.
+
 ### Retry Logic
 - `max_retries` = total attempts (3 = initial + 2 retries; -1 = unlimited)
 - Rate-limit hits and generic failures share the same `retry_count`
