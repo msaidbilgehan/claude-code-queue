@@ -476,7 +476,7 @@ class QueueManager:
             return
 
         try:
-            deleted = self._do_cleanup_session_artifacts(session_id)
+            deleted = self._do_cleanup_session_artifacts(session_id, prompt.profile_key())
         except Exception as e:
             prompt.add_log(f"Warning: artifact cleanup failed: {e}")
             print(f"Warning: artifact cleanup failed: {e}")
@@ -487,8 +487,14 @@ class QueueManager:
             print(f"[cleanup] Removed {deleted} session artifact(s)")
 
     @staticmethod
-    def _do_cleanup_session_artifacts(session_id: str) -> int:
+    def _do_cleanup_session_artifacts(
+        session_id: str, config_dir: Optional[str] = None
+    ) -> int:
         """Delete *session_id*'s scratch files; return how many were removed.
+
+        *config_dir* is the profile the run billed to, which is not necessarily the
+        one the processor is running under — a prompt carries its own. Falls back
+        to the active profile when unset.
 
         Keyed on the session UUID the queue generated, so every path targeted is an
         exact name for a file this prompt created — no size or mtime guessing, and
@@ -500,7 +506,7 @@ class QueueManager:
         finds nothing, which is safe — nothing outside these session-scoped names
         is ever touched.
         """
-        claude_dir = claude_config_dir()
+        claude_dir = Path(config_dir).expanduser() if config_dir else claude_config_dir()
         targets = [
             # Todo stub — deterministic name.
             claude_dir / "todos" / f"{session_id}-agent-{session_id}.json",

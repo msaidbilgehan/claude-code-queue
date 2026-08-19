@@ -405,13 +405,27 @@ and `~/.claude` otherwise. The queue follows the same variable, so `install-skil
 installs into the active profile and `sessions` lists that profile's
 conversations.
 
-Queued prompts run under the profile of the shell that started the processor, so
-give each profile its own queue directory:
+Each config directory holds its own credentials, so the profile decides which
+account pays for a prompt. That choice is recorded when the prompt is queued, not
+left to whichever profile the processor happens to run under:
 
 ```bash
-CLAUDE_CONFIG_DIR=~/.claude-work claude-queue --storage-dir ~/.claude-queue-work start
-CLAUDE_CONFIG_DIR=~/.claude-work-2 claude-queue --storage-dir ~/.claude-queue-w2 start
+CLAUDE_CONFIG_DIR=~/.claude-work claude-queue add "work task"
+claude-queue add "personal task" --profile ~/.claude
 ```
+
+One processor then serves every account, because **usage limits are tracked per
+account**. When one profile hits its limit the queue keeps running work billed to
+the others and returns to the limited one after its window reopens:
+
+```
+$ claude-queue add "zebra task"                    # → ~/.claude-work
+$ claude-queue add "personal task" --profile ~/.claude
+# ~/.claude-work hits its limit → the personal task keeps going
+```
+
+A prompt with no recorded profile bills to whatever the processor is running
+under, and is rate-limited together with it.
 
 Only one processor may run per storage directory. A second `start` on the same
 directory exits with an error instead of executing every prompt twice. Commands

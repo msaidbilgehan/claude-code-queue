@@ -129,6 +129,7 @@ What should be delivered when done.
 | `max_retries` | Total attempts: `3` = 3 total, `-1` = unlimited, `1` = no retry. Rate-limit retries and failures share this counter. |
 | `estimated_tokens` | Optional hint; set `null` if unknown. |
 | `resume_message` | Sent when continuing an interrupted attempt. Omit to use the configured default. |
+| `claude_config_dir` | Claude Code profile to bill. Set automatically from `$CLAUDE_CONFIG_DIR` at queue time. |
 
 ### Priority Guidelines
 
@@ -210,6 +211,11 @@ Refactor `{{filename}}` located at `{{filepath}}`:
 **`--dangerously-skip-permissions`**: Passed to `claude` by default so the
 daemon runs unattended. To disable interactive permission prompts:
 `claude-queue start --no-skip-permissions`.
+
+**Multiple accounts**: each Claude Code profile is a separate account and a
+separate usage limit. A prompt records the active profile when queued (override
+with `--profile DIR`), and one processor serves them all — when one account hits
+its limit, work billed to the others keeps running.
 
 **Resume message defaults**: set `resume_message` in the prompt, or
 `resume_message:` in `.claude-queue.yaml` in the project directory, or in

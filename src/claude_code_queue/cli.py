@@ -13,6 +13,7 @@ import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from .batch import (
     extract_variables,
@@ -181,6 +182,10 @@ Examples:
         "--working-dir", "-d",
         help="Directory the continuation runs in (default: the session's own)",
     )
+    resume_parser.add_argument(
+        "--profile", metavar="DIR",
+        help="Claude Code profile (config directory) to bill (default: the active one)",
+    )
 
     add_parser = subparsers.add_parser("add", help="Add a prompt to the queue")
     add_parser.add_argument("prompt", help="The prompt text")
@@ -193,6 +198,10 @@ Examples:
     )
     add_parser.add_argument(
         "--working-dir", "-d", default=".", help="Working directory"
+    )
+    add_parser.add_argument(
+        "--profile", metavar="DIR",
+        help="Claude Code profile (config directory) to bill (default: the active one)",
     )
     add_parser.add_argument(
         "--context-files", "-f", nargs="*", default=[], help="Context files to include"
@@ -391,6 +400,7 @@ def cmd_add(args) -> int:
         context_files=args.context_files,
         max_retries=args.max_retries,
         estimated_tokens=args.estimated_tokens,
+        claude_config_dir=_resolve_profile(args.profile),
     )
     # Use _save_single_prompt directly rather than load_queue_state() +
     # save_queue_state(). Loading the full queue state just to append one file
@@ -401,7 +411,22 @@ def cmd_add(args) -> int:
     success = storage._save_single_prompt(prompt)
     if success:
         print(f"✓ Added prompt {prompt.id} to queue")
+        print(f"  Profile: {prompt.claude_config_dir}")
     return 0 if success else 1
+
+
+def _resolve_profile(explicit: Optional[str] = None) -> str:
+    """Decide which Claude Code profile a queued prompt should bill to.
+
+    Recorded at queue time rather than left to the processor. Each config
+    directory holds its own credentials, so the profile decides which account
+    pays; a processor started under a different one would otherwise spend the
+    wrong account's budget without saying so.
+    """
+    chosen = Path(explicit).expanduser() if explicit else claude_config_dir()
+    if not chosen.is_dir():
+        print(f"Warning: profile directory {chosen} does not exist.", file=sys.stderr)
+    return str(chosen)
 
 
 def _format_age(moment: datetime) -> str:
@@ -511,7 +536,8 @@ def cmd_resume_session(args) -> int:
     # caller's directory instead would resume the conversation somewhere else
     # entirely — wrong files, wrong repository — which is never what "continue
     # this session" means.
-    known = find_session(session_id)
+    profile = _resolve_profile(args.profile)
+    known = find_session(session_id, Path(profile))
     if args.working_dir is not None:
         working_dir = str(Path(args.working_dir).expanduser().resolve())
     elif known and known.project_dir:
@@ -540,6 +566,7 @@ def cmd_resume_session(args) -> int:
         priority=args.priority,
         session_id=session_id,
         resume_message=args.message,
+        claude_config_dir=profile,
     )
 
     if not storage._save_single_prompt(prompt):
@@ -550,6 +577,7 @@ def cmd_resume_session(args) -> int:
     if known is not None:
         print(f"  Session: {known.title}")
     print(f"  Working directory: {working_dir}")
+    print(f"  Profile: {profile}")
     print(f"  Will send: {message}")
     return 0
 

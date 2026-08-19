@@ -138,6 +138,7 @@ class MarkdownPromptParser:
                 ),
                 session_id=metadata.get("session_id"),
                 resume_message=metadata.get("resume_message"),
+                claude_config_dir=metadata.get("claude_config_dir"),
             )
 
             return prompt
@@ -175,6 +176,8 @@ class MarkdownPromptParser:
                 metadata["session_id"] = prompt.session_id
             if prompt.resume_message:
                 metadata["resume_message"] = prompt.resume_message
+            if prompt.claude_config_dir:
+                metadata["claude_config_dir"] = prompt.claude_config_dir
 
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write("---\n")

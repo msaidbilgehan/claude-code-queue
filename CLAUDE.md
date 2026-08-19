@@ -133,6 +133,24 @@ a prompt reaches a terminal state (COMPLETED or FAILED).
   nothing outside these session-scoped names is ever touched. Failures are logged
   and swallowed so `save_queue_state()` always runs.
 
+### Per-Prompt Profiles and Per-Account Limits
+Each Claude Code config directory carries its own credentials, so the profile a
+prompt records decides which account it bills to.
+
+- `QueuedPrompt.claude_config_dir` is persisted in frontmatter and set at queue
+  time by `cli._resolve_profile()` — the active `$CLAUDE_CONFIG_DIR` unless
+  `--profile` overrides it. `execute_prompt()` puts it in the subprocess
+  environment; without it a prompt silently spends whichever account the
+  processor started under.
+- `QueuedPrompt.profile_key()` resolves an unset value to the active config
+  directory, so a prompt queued before profiles existed groups with the account
+  it actually bills to rather than looking like a separate one.
+- **Usage limits are per account**, so `QueueState.get_next_prompt()` blocks only
+  the profiles whose reset window has not arrived. Work billed to another account
+  keeps running — the reason for queueing across profiles at all.
+- Artifact cleanup targets the prompt's profile, which is not necessarily the
+  processor's.
+
 ### Retry Logic
 - `max_retries` = total attempts (3 = initial + 2 retries; -1 = unlimited)
 - Rate-limit hits and generic failures share the same `retry_count`

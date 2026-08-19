@@ -375,6 +375,11 @@ class ClaudeCodeInterface:
             # anti-nesting guard. The rest of the environment (PATH, HOME, API keys, etc.)
             # is preserved unchanged.
             subprocess_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+            # Each config directory carries its own credentials, so this decides
+            # which account the run bills to. Without it a prompt would silently
+            # spend whichever account the processor happened to start under.
+            if prompt.claude_config_dir:
+                subprocess_env["CLAUDE_CONFIG_DIR"] = prompt.claude_config_dir
 
             # Captures the interrupt flag across all exit paths — see finally block.
             _was_interrupted = False

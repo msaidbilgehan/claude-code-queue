@@ -8,6 +8,8 @@ from enum import Enum
 from typing import List, Optional, Dict, Any
 import uuid
 
+from .paths import claude_config_dir as _active_config_dir
+
 
 class PromptStatus(Enum):
     """Status of a queued prompt."""
@@ -41,6 +43,20 @@ class QueuedPrompt:
     retry_not_before: Optional[datetime] = None  # Fix 3: earliest time for next generic retry
     session_id: Optional[str] = None  # set after the first attempt; makes retries resume it
     resume_message: Optional[str] = None  # overrides the configured resume message
+    claude_config_dir: Optional[str] = None  # which Claude Code profile — and account — to bill
+
+    def profile_key(self) -> str:
+        """Identify the Claude Code account this prompt bills to.
+
+        Each config directory holds its own credentials, so it stands in for the
+        account. Prompts are grouped by it because usage limits are per account:
+        one profile exhausting its window must not stall another's work.
+
+        A prompt with no recorded profile bills to whatever the processor is
+        running under, so it resolves to that — otherwise it would look like a
+        separate account and dodge a limit it actually shares.
+        """
+        return self.claude_config_dir or str(_active_config_dir())
 
     def add_log(self, message: str) -> None:
         """Add a log entry with timestamp."""
@@ -151,19 +167,23 @@ class QueueState:
         """Get the next prompt to execute (highest priority, can execute now)."""
         now = datetime.now()
 
-        # If any prompt is actively rate-limited (reset window not yet reached),
-        # don't start new work — we're already known to be rate-limited and firing
-        # more requests would just pile up additional rate-limit hits.
-        if any(
-            p.status == PromptStatus.RATE_LIMITED and not p.should_execute_now(now)
+        # A profile whose reset window has not arrived is known to be rate-limited;
+        # firing more requests at it only piles up further hits. Limits are per
+        # account, though, so this blocks that profile alone — work billing to a
+        # different account keeps running, which is the point of queueing across
+        # several profiles.
+        blocked_profiles = {
+            p.profile_key()
             for p in self.prompts
-        ):
-            return None
+            if p.status == PromptStatus.RATE_LIMITED and not p.should_execute_now(now)
+        }
 
         executable_prompts = [
             p
             for p in self.prompts
-            if p.status == PromptStatus.QUEUED and p.should_execute_now(now)
+            if p.status == PromptStatus.QUEUED
+            and p.should_execute_now(now)
+            and p.profile_key() not in blocked_profiles
         ]
 
         if not executable_prompts:
@@ -174,6 +194,7 @@ class QueueState:
                 if p.status == PromptStatus.RATE_LIMITED
                 and p.should_execute_now(now)
                 and p.can_retry()
+                and p.profile_key() not in blocked_profiles
             ]
             if retry_prompts:
                 # Reset status for retry
